@@ -1,0 +1,137 @@
+#!/bin/bash
+
+# Converts LaTeX code of a commutative diagram into an image.
+#
+# This script must be adjusted manually before use,
+# follow the instructions marked by `ADJUST`.
+
+
+set -e 
+
+# This script needs the "diagrams" tex pagkage created by Paul Taylor.
+# You'll have to download it from his website, or install it in some
+# other way.
+# ADJUST: Adjust this path to Paul Taylor's diagrams package file:
+PATH_TO_DIAGRAMS=~/bin/V3,95.tex
+if [ ! -f "$PATH_TO_DIAGRAMS" ] 
+then
+  echo "You have to adjust the path to the diagrams-package file in"
+  echo "the code of 'renderCommutativeDiagram'"
+  exit 1
+fi
+
+if [ ! command -v pdflatex ]
+then
+  echo "The command 'pdflatex' is not available. Exit."
+  exit 2
+fi
+
+if [ ! command -v pdfcrop ]
+then
+  echo "This script requires the 'pdfcrop' command."
+  echo "On ubuntoids, it's usually available through"
+  echo ""
+  echo "    sudo apt-get install texlive-extra-utils"
+  exit 3
+fi
+
+if [ ! command -v pdf2svg ]
+then
+  echo "This script requires the 'pdf2svg' command."
+  echo "On ubuntoids, it can usually be installed with"
+  echo ""
+  echo "    sudo apt-get install pdf2svg"
+  exit 4
+fi
+
+# Creates temporary directory for all the tex files.
+if [ ! -d "/tmp/rcdt" ]
+then
+  mkdir -p "/tmp/rcdt"
+fi
+
+inputFile=$1
+if [ ! -f "$inputFile" ] 
+then
+  echo "Usage: "
+  echo ""
+  echo "    $ renderCommutativeDiagram <myDiagramFile>"
+  echo ""
+  echo "where <myDiagramFile> is plain text file that contains" 
+  echo "the TeX definition of the diagram that would otherwise"
+  echo "go between \\begin{diagram} and \\end{diagram} in a"
+  echo "normal .tex document."
+else 
+ 
+  # generate names for intermediate files
+  onlyPrefix="$inputFile"
+  echo "Processing input file: $inputFile"
+  if [[ "$inputFile" =~ ^.*\.tex$ ]]
+  then
+    echo "trimming"
+    fileNameLen=${#inputFile}
+    echo "$fileNameLen"
+    neededLen=$((fileNameLen-4))
+    echo "$neededLen"
+    onlyPrefix="${inputFile:0:neededLen}"
+    echo "$onlyPrefix"
+  fi
+  texFile="${onlyPrefix}_full.tex"
+  pdfFile="${onlyPrefix}_full.pdf"
+  cropFile="${onlyPrefix}_full-crop.pdf"
+  svgFile="${onlyPrefix}.svg"
+
+  # generate input for pdflatex, prepend everything until \begin{diagram}
+  cat <<HEREDOCUMENT >> "/tmp/rcdt/$texFile"
+\documentclass{minimal}
+\usepackage{amsmath}
+\usepackage{amsfonts}
+\input{${PATH_TO_DIAGRAMS}}
+\newarrow{Eq} =====
+\begin{document}
+\begin{diagram}
+HEREDOCUMENT
+
+  # append the actual diagram definition
+  cat "$inputFile" >> "/tmp/rcdt/$texFile"
+
+  # append stuff starting with \end{diagram}
+  cat << HEREDOCUMENT >> "/tmp/rcdt/$texFile"
+\end{diagram}
+\end{document}
+HEREDOCUMENT
+
+  cd "/tmp/rcdt"
+  pdflatex "$texFile" && \
+  pdfcrop "$pdfFile"  && \
+  pdf2svg "$cropFile" "$svgFile" && \
+  (
+    # rescaling the `pt`-dimensions of the svg by fixed factor 4
+    FACTOR=2
+    # (done by elementary string manipulations, becaus svg = text)
+    widthDef=$(grep -o 'width="[[:digit:]]\+pt"' "$svgFile")
+    heightDef=$(grep -o 'height="[[:digit:]]\+pt"' "$svgFile")
+    echo "$widthDef"
+    echo "$heightDef"
+    widthPt=$(echo "$widthDef" | tr -dc '[:digit:]')
+    heightPt=$(echo "$heightDef" | tr -dc '[:digit:]')
+    echo "$widthPt $heightPt"
+    multWidth=$(($FACTOR*widthPt))
+    multHeight=$(($FACTOR*heightPt))
+    multWidthDef="width=\"${multWidth}pt\""
+    multHeightDef="height=\"${multHeight}pt\""
+    echo "$multWidthDef $multHeightDef"
+    sed -i "s/$widthDef/$multWidthDef/" "$svgFile"
+    sed -i "s/$heightDef/$multHeightDef/" "$svgFile"
+  )
+
+  # Cleanup: remove tons of intermediate files
+  rm "/tmp/rcdt/$texFile"
+  rm "/tmp/rcdt/$pdfFile"
+  rm "/tmp/rcdt/$cropFile"
+  rm "/tmp/rcdt/${onlyPrefix}_full.aux"
+  rm "/tmp/rcdt/${onlyPrefix}_full.log"
+
+  cd -
+  mv "/tmp/rcdt/$svgFile" ./$svgFile
+fi
